@@ -1,15 +1,15 @@
 .clang-format
 build
-# CMakeCache.txt
+CMakeCache.txt
 .cache
 CMakeFiles
 cmake_install.cmake
-CMakeLists.txt
+# CMakeLists.txt
 compile_commands.json
 CPackConfig.cmake
 CPackSourceConfig.cmake
 game7
 #include
 #main.cpp
-#Makefile
+Makefile
 raylib
