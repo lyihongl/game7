@@ -13,10 +13,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)  # Ensure the standard is required
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20")
 
 set(RAYLIB_BINARY_DIR "${CMAKE_BINARY_DIR}/raylib")
+find_package (Eigen3 3.4 REQUIRED NO_MODULE)
 
 # Add the raylib subdirectory and specify the binary directory
 add_subdirectory(../external/raylib ${RAYLIB_BINARY_DIR})
 
-target_link_libraries(game7 raylib)# Specify a binary directory for Raylib (e.g., inside your build directory)
+target_link_libraries(game7 raylib Eigen3::Eigen)# Specify a binary directory for Raylib (e.g., inside your build directory)
 target_include_directories(game7 PUBLIC ${CMAKE_SOURCE_DIR}/include)
 

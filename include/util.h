@@ -1,6 +1,7 @@
 #include <stdexcept>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace yhl_util {
 struct error
