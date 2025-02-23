@@ -55,9 +55,9 @@ class drone_manager
       , red(3)
       , yellow(n)
       , player(1)
-      , qtree_green(0, 0, 1920, 1080)
-      , qtree_red(0, 0, 1920, 1080)
-      , qtree_yellow(0, 0, 1920, 1080)
+      , qtree_green(-1000, -1000, 3920, 3080)
+      , qtree_red(-1000, -1000, 3920, 3080)
+      , qtree_yellow(-1000, -1000, 3920, 3080)
     {
         auto xd = std::uniform_int_distribution<>{ 0, 1920 };
         auto yd = std::uniform_int_distribution<>{ 0, 1920 };
@@ -132,10 +132,11 @@ drone_manager::rule(std::vector<drone>& a,
     for (auto& pa : a) {
         Vector2 tf{ 0, 0 };
         std::vector<typename std::vector<drone>::iterator> res;
-        b.query(pa.pos.x - effective_dist,
-                pa.pos.y - effective_dist,
-                effective_dist,
-                effective_dist,
+        auto pos = GetWorldToScreen2D(pa.pos, *b.c);
+        b.query(pos.x - effective_dist,
+                pos.y - effective_dist,
+                effective_dist * 2,
+                effective_dist * 2,
                 res);
         for (auto pb : res) {
             float dist = Vector2Distance(pa.pos, pb->pos);
@@ -193,36 +194,36 @@ drone_manager::tick(Vector2 const& player_pos, const Camera2D& c)
         auto [px, py] = GetWorldToScreen2D(it->pos, c);
         qtree_yellow.insert(it, px, py);
     }
-    for (auto it = red.begin(); it != red.end(); it++) {
-        auto [px, py] = GetWorldToScreen2D(it->pos, c);
-        qtree_red.insert(it, px, py);
-    }
+    // for (auto it = red.begin(); it != red.end(); it++) {
+    //     auto [px, py] = GetWorldToScreen2D(it->pos, c);
+    //     qtree_red.insert(it, px, py);
+    // }
 
-    // rule(green, qtree_green, -0.32, 200);
-    // rule(green, qtree_green, 0.3, 70);
-    // rule(green, qtree_red, 0.8, 50);
-    // rule(green, qtree_red, -0.17, 200);
-    // // rule(green, red, 0.5, 10);
-    // rule(green, qtree_yellow, 0.34, 200);
-    // rule(red, qtree_green, -0.34, 200);
-    // rule(red, qtree_red, 0.1, 400);
-    // rule(red, qtree_yellow, 0.3, 100);
-    // // rule(red, red, 0.8, 50);
-    // rule(yellow, qtree_yellow, 0.15, 60);
-    // rule(yellow, qtree_green, -0.2, 200);
-
-    rule(green, green, -0.32, 200);
-    rule(green, green, 0.3, 70);
+    rule(green, qtree_green, -0.32, 200);
+    rule(green, qtree_green, 0.3, 70);
     rule(green, red, 0.8, 50);
     rule(green, red, -0.17, 200);
     // rule(green, red, 0.5, 10);
-    rule(green, yellow, 0.34, 200);
-    rule(red, green, -0.34, 200);
+    rule(green, qtree_yellow, 0.34, 200);
+    rule(red, qtree_green, -0.34, 200);
     rule(red, red, 0.1, 400);
-    rule(red, yellow, 0.3, 100);
+    rule(red, qtree_yellow, 0.3, 100);
     // rule(red, red, 0.8, 50);
-    rule(yellow, yellow, 0.15, 60);
-    rule(yellow, green, -0.2, 200);
+    rule(yellow, qtree_yellow, 0.15, 60);
+    rule(yellow, qtree_green, -0.2, 200);
+
+    // rule(green, green, -0.32, 200);
+    // rule(green, green, 0.3, 70);
+    // rule(green, red, 0.8, 50);
+    // rule(green, red, -0.17, 200);
+    // // rule(green, red, 0.5, 10);
+    // rule(green, yellow, 0.34, 200);
+    // rule(red, green, -0.34, 200);
+    // rule(red, red, 0.1, 400);
+    // rule(red, yellow, 0.3, 100);
+    // // rule(red, red, 0.8, 50);
+    // rule(yellow, yellow, 0.15, 60);
+    // rule(yellow, green, -0.2, 200);
     player_rule(yellow, player_pos, -0.2, 500);
     player_rule(green, player_pos, -1.4, 2000);
     player_rule(red, player_pos, -1.4, 2000);
@@ -377,6 +378,9 @@ struct bullet
     Vector2 pos;
 };
 
+template<yhl_util::has_pos T>
+Camera2D* yhl_util::quadtree<T>::c = nullptr;
+
 int
 main(void)
 {
@@ -399,6 +403,7 @@ main(void)
     Camera2D c{};
     c.zoom = 1.0f;
     c.offset = { 1920.f / 2, 1080.f / 2 };
+    yhl_util::quadtree<drone>::c = &c;
     SetTargetFPS(60);
     HideCursor();
 
@@ -458,6 +463,11 @@ main(void)
         ClearBackground(BLACK);
         dm.tick(s.get_center(), c);
         dm.qtree_green.draw();
+        dm.qtree_yellow.draw();
+        DrawRectangleLines(mouse_x - 50, mouse_y - 50, 100, 100, WHITE);
+        std::vector<typename std::vector<drone>::iterator> res;
+        // dm.qtree_green.query(mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+        // dm.qtree_yellow.query(mouse_x - 50, mouse_y - 50, 100, 100, res, true);
 
         {
             BeginMode2D(c);
@@ -468,6 +478,9 @@ main(void)
             draw_ship(y);
             draw_turret(t, GetScreenToWorld2D(GetMousePosition(), c));
             dm.render();
+            for (auto i : res) {
+                DrawCircle(i->pos.x, i->pos.y, 3, BLUE);
+            }
             EndMode2D();
         }
 

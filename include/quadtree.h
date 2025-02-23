@@ -41,21 +41,23 @@ class quadtree
     std::array<std::unique_ptr<quadtree<T>>, 4> quadrants;
     std::vector<typename std::vector<T>::iterator> elements;
     std::size_t capacity;
-    double min_w;
-    double min_h;
+    double min_w{ 1920.f / 32 };
+    double min_h{ 1080.f / 32 };
 
   public:
     double x;
     double y;
     double w;
     double h;
+    static Camera2D* c;
     quadtree(double x, double y, double w, double h);
     void insert(std::vector<T>::iterator element, double x_, double y_);
     void query(double,
                double,
                double,
                double,
-               std::vector<typename std::vector<T>::iterator>&) const;
+               std::vector<typename std::vector<T>::iterator>&,
+               bool debug = false) const;
     void draw() const;
     void clear();
 };
@@ -65,9 +67,7 @@ quadtree<T>::quadtree(double x, double y, double w, double h)
   , y(y)
   , w(w)
   , h(h)
-  , capacity(25)
-  , min_h(h / (2 << 5))
-  , min_w(w / (2 << 5))
+  , capacity(50)
 {
 }
 
@@ -77,33 +77,45 @@ quadtree<T>::query(double x_,
                    double y_,
                    double w_,
                    double h_,
-                   std::vector<typename std::vector<T>::iterator>& res) const
+                   std::vector<typename std::vector<T>::iterator>& res,
+                   bool debug) const
 {
-    if (!CheckCollisionRecs(
-          Rectangle{
-            .x = float(x_),
-            .y = float(y_),
-            .width = float(w_),
-            .height = float(h_),
+    if (!yhl_util::check_collision(
+          yhl_util::Rectangle{
+            .x = x_,
+            .y = y_,
+            .width = w_,
+            .height = h_,
           },
-          Rectangle{
-            .x = float(x),
-            .y = float(y),
-            .width = float(w),
-            .height = float(h),
+          yhl_util::Rectangle{
+            .x = x,
+            .y = y,
+            .width = w,
+            .height = h,
           })) {
         return;
     }
-    // DrawRectangleLinesEx(Rectangle{ x, y, w, h }, 10, RED);
+    if (debug) {
+        DrawRectangleLinesEx(::Rectangle{ x, y, w, h }, 5, RED);
+    }
 
-    if (elements.size() != 0) {
-        for (auto& e : elements) {
+    if (elements.size() > 0) {
+        for (auto e : elements) {
+            if (debug) {
+                if (c) {
+                    auto ep = GetWorldToScreen2D(e->pos, *c);
+                    DrawLineV(ep, Vector2{ x, y }, RED);
+                    std::string pos = "(" + std::to_string(ep.x) + ", " +
+                                      std::to_string(ep.y) + ")";
+                    DrawText(pos.c_str(), ep.x, ep.y, 10, RED);
+                }
+            }
             res.emplace_back(e);
         }
     }
     if (quadrants[0]) {
         for (auto& q : quadrants) {
-            q->query(x_, y_, w_, h_, res);
+            q->query(x_, y_, w_, h_, res, debug);
         }
     }
 }
@@ -122,18 +134,22 @@ quadtree<T>::insert(std::vector<T>::iterator element, double x_, double y_)
           std::make_unique<quadtree<T>>(x + w / 2, y + h / 2, w / 2, h / 2);
         quadrants[3] =
           std::make_unique<quadtree<T>>(x, y + h / 2, w / 2, h / 2);
-        for (auto& i : elements) {
-            if (i->pos.x <= x + w / 2) {
-                if (i->pos.y <= y + h / 2) {
-                    quadrants[0]->insert(i, i->pos.x, i->pos.y);
+        for (auto i : elements) {
+            auto pos = i->pos;
+            if (c) {
+                pos = GetWorldToScreen2D(i->pos, *c);
+            }
+            if (pos.x <= x + w / 2) {
+                if (pos.y <= y + h / 2) {
+                    quadrants[0]->insert(i, pos.x, pos.y);
                 } else {
-                    quadrants[3]->insert(i, i->pos.x, i->pos.y);
+                    quadrants[3]->insert(i, pos.x, pos.y);
                 }
             } else {
-                if (i->pos.y <= y + h / 2) {
-                    quadrants[1]->insert(i, i->pos.x, i->pos.y);
+                if (pos.y <= y + h / 2) {
+                    quadrants[1]->insert(i, pos.x, pos.y);
                 } else {
-                    quadrants[2]->insert(i, i->pos.x, i->pos.y);
+                    quadrants[2]->insert(i, pos.x, pos.y);
                 }
             }
         }

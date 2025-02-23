@@ -113,5 +113,14 @@ class out
         return *this;
     }
 };
+struct Rectangle
+{
+    double x, y;          // Coordinates of the bottom-left corner
+    double width, height; // Width and height of the rectangle
+};
+
+// Function to check collision between two rectangles
+bool
+check_collision(const Rectangle& rect1, const Rectangle& rect2);
 
 };
