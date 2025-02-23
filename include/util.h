@@ -1,3 +1,4 @@
+#pragma once
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -59,4 +60,58 @@ class yhl_result
   private:
     std::variant<T, E> data;
 };
+template<typename T>
+class out
+{
+    T* ptr; // Pointer to the output variable
+
+  public:
+    // Constructor: Takes a reference to the output variable
+    explicit out(T& output)
+      : ptr(&output)
+    {
+    }
+
+    // Disallow default construction (output must be provided)
+    out() = delete;
+
+    // Assignment operator: Assigns a value to the output variable
+    out& operator=(const T& value)
+    {
+        if (!ptr) {
+            throw std::runtime_error("out<T> is not initialized");
+        }
+        *ptr = value;
+        return *this;
+    }
+
+    // Implicit conversion to T& for direct access
+    operator T&()
+    {
+        if (!ptr) {
+            throw std::runtime_error("out<T> is not initialized");
+        }
+        return *ptr;
+    }
+
+    // Disallow copying (to prevent misuse)
+    out(const out&) = delete;
+    out& operator=(const out&) = delete;
+
+    // Allow moving (optional, for advanced use cases)
+    out(out&& other) noexcept
+      : ptr(other.ptr)
+    {
+        other.ptr = nullptr;
+    }
+    out& operator=(out&& other) noexcept
+    {
+        if (this != &other) {
+            ptr = other.ptr;
+            other.ptr = nullptr;
+        }
+        return *this;
+    }
+};
+
 };

@@ -1,9 +1,13 @@
-#include "include/util.h"
+#include "quadtree.h"
+#include "util.h"
 #include <Eigen/Dense>
 #include <Eigen/src/Core/Matrix.h>
 #include <Eigen/src/Geometry/Rotation2D.h>
+#include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <optional>
+#include <random>
 #include <raylib.h>
 #include <raymath.h>
 #include <vector>
@@ -14,6 +18,11 @@ concept has_center = requires(const T& t) {
 };
 
 struct ship;
+struct mounting_point;
+struct turret;
+class drone_manager;
+struct drone;
+struct bullet;
 
 Rectangle
 place_center_at(Rectangle& r, Vector2& c)
@@ -31,8 +40,208 @@ place_center_at(Rectangle& r, Vector2&& c)
     return r;
 }
 
-struct mounting_point;
-struct turret;
+struct drone
+{
+    Vector2 pos;
+    Vector2 vel{ 0, 0 };
+    float mass{ 1.f };
+};
+
+class drone_manager
+{
+  public:
+    drone_manager(int n, std::mt19937& gen)
+      : green(n)
+      , red(3)
+      , yellow(n)
+      , player(1)
+      , qtree_green(0, 0, 1920, 1080)
+      , qtree_red(0, 0, 1920, 1080)
+      , qtree_yellow(0, 0, 1920, 1080)
+    {
+        auto xd = std::uniform_int_distribution<>{ 0, 1920 };
+        auto yd = std::uniform_int_distribution<>{ 0, 1920 };
+        for (auto& g : green) {
+            g.pos = { float(xd(gen)), float(yd(gen)) };
+        }
+        for (auto& g : red) {
+            g.pos = { float(xd(gen)), float(yd(gen)) };
+            g.mass = 150.f;
+        }
+        for (auto& g : yellow) {
+            g.pos = { float(xd(gen)), float(yd(gen)) };
+        }
+        player[0].pos = { 1920.f / 2, 1080.f / 2 };
+    }
+    void tick(Vector2 const&, const Camera2D&);
+    void render() const;
+    void rule(std::vector<drone>& a,
+              std::vector<drone>& b,
+              float f,
+              float effective_dist);
+    void rule(std::vector<drone>& a,
+              yhl_util::quadtree<drone>& b,
+              float f,
+              float effective_dist);
+    void player_rule(std::vector<drone>& a,
+                     const Vector2& player_pos,
+                     float f,
+                     float effective_dist);
+
+    yhl_util::quadtree<drone> qtree_green;
+    yhl_util::quadtree<drone> qtree_yellow;
+    yhl_util::quadtree<drone> qtree_red;
+
+  private:
+    std::vector<drone> green;
+    std::vector<drone> red;
+    std::vector<drone> yellow;
+    std::vector<drone> player;
+};
+
+void
+drone_manager::rule(std::vector<drone>& a,
+                    std::vector<drone>& b,
+                    float f,
+                    float effective_dist)
+{
+    for (auto& pa : a) {
+        Vector2 tf{ 0, 0 };
+
+        for (auto& pb : b) {
+            float dist = Vector2Distance(pa.pos, pb.pos);
+            if (dist > 0 && dist < effective_dist) {
+                float F = pb.mass * 0.5 * f / dist;
+                tf.x += F * (pa.pos.x - pb.pos.x);
+                tf.y += F * (pa.pos.y - pb.pos.y);
+            }
+        }
+        if (tf.x != 0 && tf.y != 0) {
+            pa.vel = Vector2Scale(pa.vel + tf, 0.5);
+            pa.vel = Vector2ClampValue(pa.vel, 1.f, 10.f);
+            pa.pos = pa.pos + pa.vel;
+        }
+    }
+}
+void
+drone_manager::rule(std::vector<drone>& a,
+                    yhl_util::quadtree<drone>& b,
+                    float f,
+                    float effective_dist)
+{
+    for (auto& pa : a) {
+        Vector2 tf{ 0, 0 };
+        std::vector<typename std::vector<drone>::iterator> res;
+        b.query(pa.pos.x - effective_dist,
+                pa.pos.y - effective_dist,
+                effective_dist,
+                effective_dist,
+                res);
+        for (auto pb : res) {
+            float dist = Vector2Distance(pa.pos, pb->pos);
+            if (dist > 0 && dist < effective_dist) {
+                float F = pb->mass * 0.5 * f / dist;
+                tf.x += F * (pa.pos.x - pb->pos.x);
+                tf.y += F * (pa.pos.y - pb->pos.y);
+            }
+        }
+
+        if (tf.x != 0 && tf.y != 0) {
+            pa.vel = Vector2Scale(pa.vel + tf, 0.5);
+            pa.vel = Vector2ClampValue(pa.vel, 1.f, 10.f);
+            pa.pos = pa.pos + pa.vel;
+        }
+    }
+}
+void
+drone_manager::player_rule(std::vector<drone>& a,
+                           const Vector2& player_pos,
+                           float f,
+                           float effective_dist)
+{
+    for (auto& pa : a) {
+        Vector2 tf{ 0, 0 };
+        float dist = Vector2Distance(pa.pos, player_pos);
+        float F = 0.5 * f / dist;
+        if (dist > 1000) {
+            F *= dist / 1000;
+        }
+        if (dist > 100) {
+            tf.x += F * (pa.pos.x - player_pos.x);
+            tf.y += F * (pa.pos.y - player_pos.y);
+        } else if (dist <= 100) {
+            tf.x -= 2 * F * (pa.pos.x - player_pos.x);
+            tf.y -= 2 * F * (pa.pos.y - player_pos.y);
+        }
+        pa.vel = Vector2Scale(pa.vel + tf, 0.5);
+        // pa.vel = Vector2ClampValue(pa.vel, 1.f, 50.f);
+        pa.pos = pa.pos + pa.vel;
+    }
+}
+
+void
+drone_manager::tick(Vector2 const& player_pos, const Camera2D& c)
+{
+    qtree_green.clear();
+    qtree_yellow.clear();
+    qtree_red.clear();
+    for (auto it = green.begin(); it != green.end(); it++) {
+        auto [px, py] = GetWorldToScreen2D(it->pos, c);
+        qtree_green.insert(it, px, py);
+    }
+    for (auto it = yellow.begin(); it != yellow.end(); it++) {
+        auto [px, py] = GetWorldToScreen2D(it->pos, c);
+        qtree_yellow.insert(it, px, py);
+    }
+    for (auto it = red.begin(); it != red.end(); it++) {
+        auto [px, py] = GetWorldToScreen2D(it->pos, c);
+        qtree_red.insert(it, px, py);
+    }
+
+    // rule(green, qtree_green, -0.32, 200);
+    // rule(green, qtree_green, 0.3, 70);
+    // rule(green, qtree_red, 0.8, 50);
+    // rule(green, qtree_red, -0.17, 200);
+    // // rule(green, red, 0.5, 10);
+    // rule(green, qtree_yellow, 0.34, 200);
+    // rule(red, qtree_green, -0.34, 200);
+    // rule(red, qtree_red, 0.1, 400);
+    // rule(red, qtree_yellow, 0.3, 100);
+    // // rule(red, red, 0.8, 50);
+    // rule(yellow, qtree_yellow, 0.15, 60);
+    // rule(yellow, qtree_green, -0.2, 200);
+
+    rule(green, green, -0.32, 200);
+    rule(green, green, 0.3, 70);
+    rule(green, red, 0.8, 50);
+    rule(green, red, -0.17, 200);
+    // rule(green, red, 0.5, 10);
+    rule(green, yellow, 0.34, 200);
+    rule(red, green, -0.34, 200);
+    rule(red, red, 0.1, 400);
+    rule(red, yellow, 0.3, 100);
+    // rule(red, red, 0.8, 50);
+    rule(yellow, yellow, 0.15, 60);
+    rule(yellow, green, -0.2, 200);
+    player_rule(yellow, player_pos, -0.2, 500);
+    player_rule(green, player_pos, -1.4, 2000);
+    player_rule(red, player_pos, -1.4, 2000);
+}
+
+void
+drone_manager::render() const
+{
+    for (auto const& g : green) {
+        DrawCircle(g.pos.x, g.pos.y, 2, GREEN);
+    }
+    for (auto const& g : red) {
+        DrawCircle(g.pos.x, g.pos.y, 10, RED);
+    }
+    for (auto const& g : yellow) {
+        DrawCircle(g.pos.x, g.pos.y, 2, YELLOW);
+    }
+}
+
 /*
     the turrent will attach to a mounting point
 */
@@ -45,6 +254,7 @@ struct turret
     {
     }
     float gun_angle;
+    void tick();
 };
 
 struct mounting_point
@@ -84,13 +294,13 @@ draw_turret(const turret& t, const Vector2& mouse_pos)
 {
     if (t.attachment_point.has_value()) {
         auto [cx, cy] = t.attachment_point.value()->get_center();
-        DrawCircleLines(cx, cy, 10, BLACK);
+        DrawCircleLines(cx, cy, 10, WHITE);
         auto angle = Vector2LineAngle({ cx, cy }, mouse_pos);
         auto [dx, dy] = Vector2Rotate({ 0, -15 }, angle + PI / 2);
         DrawLine(cx, cy, cx + dx, cy - dy, RED);
     } else {
         auto [cx, cy] = mouse_pos;
-        DrawCircleLines(cx, cy, 10, BLACK);
+        DrawCircleLines(cx, cy, 10, WHITE);
         DrawLine(cx, cy, cx, cy - 15, RED);
     }
 }
@@ -121,7 +331,7 @@ draw_ship(const ship& s)
 {
     Rectangle r{ 0, 0, 40, 100 };
     place_center_at(r, s.get_center());
-    DrawRectangleLinesEx(r, 1, BLACK);
+    DrawRectangleLinesEx(r, 1, WHITE);
     auto [cx, cy] = s.get_center();
     DrawCircle(cx, cy, 2, RED);
     for (auto const& m : s.mounting_points) {
@@ -153,10 +363,24 @@ operator-(Vector2& s, const Vector2& other)
     return Vector2Subtract(s, other);
 }
 
+Vector2&
+operator*(Vector2& s, const float other)
+{
+    s.x *= other;
+    s.y *= other;
+    return s;
+}
+
+struct bullet
+{
+    Vector2 v;
+    Vector2 pos;
+};
+
 int
 main(void)
 {
-    ship s{ ship_param{} };
+    ship s{ ship_param{ .x = 1920.f / 2, .y = 1080.f / 2 } };
     ship y{ ship_param{} };
     s.mounting_points.emplace_back(
       mounting_point{ .offset{ 20, 10 }, .parent = s });
@@ -166,6 +390,11 @@ main(void)
 
     turret t;
 
+    std::random_device rd{};
+    auto mtgen = std::mt19937{ rd() };
+
+    drone_manager dm{ 1000, mtgen };
+
     InitWindow(1920, 1080, "raylib [core] example - basic window");
     Camera2D c{};
     c.zoom = 1.0f;
@@ -173,11 +402,13 @@ main(void)
     SetTargetFPS(60);
     HideCursor();
 
+    std::vector<bullet> bullets;
+
     while (!WindowShouldClose()) {
 
         c.zoom += ((float)GetMouseWheelMove() * 0.2f);
         c.target = s.get_center();
-        s.y += 1;
+        // s.y += 1;
 
         for (auto m = s.mounting_points.begin(); m != s.mounting_points.end();
              m++) {
@@ -202,16 +433,41 @@ main(void)
             }
         }
 
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            for (auto const& m : s.mounting_points) {
+                if (m.attachment.has_value()) {
+
+                    bullets.emplace_back(bullet{
+                      .v = Vector2Normalize(
+                             GetScreenToWorld2D(GetMousePosition(), c) -
+                             m.get_center()) *
+                           10.f,
+                      .pos = m.get_center(),
+                    });
+                }
+            }
+        }
+
+        for (auto& b : bullets) {
+            b.pos += b.v;
+        }
+
         BeginDrawing();
         auto [mouse_x, mouse_y] = GetMousePosition();
-        DrawCircleLines(mouse_x, mouse_y, 3, BLACK);
-        ClearBackground(RAYWHITE);
+        DrawCircleLines(mouse_x, mouse_y, 3, WHITE);
+        ClearBackground(BLACK);
+        dm.tick(s.get_center(), c);
+        dm.qtree_green.draw();
 
         {
             BeginMode2D(c);
+            for (auto& b : bullets) {
+                DrawCircleV(b.pos, 4, SKYBLUE);
+            }
             draw_ship(s);
             draw_ship(y);
             draw_turret(t, GetScreenToWorld2D(GetMousePosition(), c));
+            dm.render();
             EndMode2D();
         }
 
