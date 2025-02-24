@@ -8,6 +8,7 @@
 #include <iostream>
 #include <optional>
 #include <random>
+#include <ratio>
 #include <raylib.h>
 #include <raymath.h>
 #include <vector>
@@ -45,6 +46,7 @@ struct drone
     Vector2 pos;
     Vector2 vel{ 0, 0 };
     float mass{ 1.f };
+    int health;
 };
 
 class drone_manager
@@ -55,21 +57,24 @@ class drone_manager
       , red(3)
       , yellow(n)
       , player(1)
-      , qtree_green(-1000, -1000, 3920, 3080)
-      , qtree_red(-1000, -1000, 3920, 3080)
-      , qtree_yellow(-1000, -1000, 3920, 3080)
+      , qtree_green(-1000, -1000, 4920, 4080)
+      , qtree_red(-1000, -1000, 4920, 4080)
+      , qtree_yellow(-1000, -1000, 4920, 4080)
     {
         auto xd = std::uniform_int_distribution<>{ 0, 1920 };
         auto yd = std::uniform_int_distribution<>{ 0, 1920 };
         for (auto& g : green) {
             g.pos = { float(xd(gen)), float(yd(gen)) };
+            g.health = 1;
         }
         for (auto& g : red) {
             g.pos = { float(xd(gen)), float(yd(gen)) };
             g.mass = 150.f;
+            g.health = 100;
         }
         for (auto& g : yellow) {
             g.pos = { float(xd(gen)), float(yd(gen)) };
+            g.health = 1;
         }
         player[0].pos = { 1920.f / 2, 1080.f / 2 };
     }
@@ -186,6 +191,10 @@ drone_manager::tick(Vector2 const& player_pos, const Camera2D& c)
     qtree_green.clear();
     qtree_yellow.clear();
     qtree_red.clear();
+    auto remove_green = std::remove_if(
+      green.begin(), green.end(), [](auto const& g) { return g.health <= 0; });
+    green.erase(remove_green, green.end());
+
     for (auto it = green.begin(); it != green.end(); it++) {
         auto [px, py] = GetWorldToScreen2D(it->pos, c);
         qtree_green.insert(it, px, py);
@@ -376,6 +385,15 @@ struct bullet
 {
     Vector2 v;
     Vector2 pos;
+    decltype(std::chrono::system_clock::now()) lifetime;
+    int hits = 1;
+};
+
+struct explosion_particle
+{
+    Vector2 pos;
+    std::chrono::milliseconds lifetime;
+    decltype(std::chrono::system_clock::now()) creation_time;
 };
 
 template<yhl_util::has_pos T>
@@ -409,6 +427,13 @@ main(void)
 
     std::vector<bullet> bullets;
 
+    bool qtree_debug = false;
+
+    auto bullet_time = std::chrono::duration(std::chrono::milliseconds(10));
+    auto next_time = std::chrono::system_clock::now();
+
+    std::vector<explosion_particle> explosions;
+
     while (!WindowShouldClose()) {
 
         c.zoom += ((float)GetMouseWheelMove() * 0.2f);
@@ -437,24 +462,29 @@ main(void)
                 t.attachment_point = std::nullopt;
             }
         }
+        if (IsKeyPressed(KEY_B)) {
+            qtree_debug = !qtree_debug;
+        }
 
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
             for (auto const& m : s.mounting_points) {
-                if (m.attachment.has_value()) {
+                if (m.attachment.has_value() &&
+                    std::chrono::system_clock::now() >= next_time) {
 
                     bullets.emplace_back(bullet{
                       .v = Vector2Normalize(
                              GetScreenToWorld2D(GetMousePosition(), c) -
                              m.get_center()) *
-                           10.f,
+                           15.f,
                       .pos = m.get_center(),
+                      .lifetime = std::chrono::system_clock::now() +
+                                  std::chrono::seconds(5),
                     });
+                    next_time =
+                      std::max(next_time + bullet_time,
+                               std::chrono::system_clock::now() + bullet_time);
                 }
             }
-        }
-
-        for (auto& b : bullets) {
-            b.pos += b.v;
         }
 
         BeginDrawing();
@@ -462,26 +492,88 @@ main(void)
         DrawCircleLines(mouse_x, mouse_y, 3, WHITE);
         ClearBackground(BLACK);
         dm.tick(s.get_center(), c);
-        dm.qtree_green.draw();
-        dm.qtree_yellow.draw();
-        DrawRectangleLines(mouse_x - 50, mouse_y - 50, 100, 100, WHITE);
         std::vector<typename std::vector<drone>::iterator> res;
-        // dm.qtree_green.query(mouse_x - 50, mouse_y - 50, 100, 100, res, true);
-        // dm.qtree_yellow.query(mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+        if (qtree_debug) {
+            dm.qtree_green.draw();
+            dm.qtree_yellow.draw();
+            dm.qtree_green.query(
+              mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+            dm.qtree_yellow.query(
+              mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+        }
+        DrawRectangleLines(mouse_x - 50, mouse_y - 50, 100, 100, WHITE);
 
         {
             BeginMode2D(c);
             for (auto& b : bullets) {
-                DrawCircleV(b.pos, 4, SKYBLUE);
+                Color c = SKYBLUE;
+                c.a = 255 *
+                      std::chrono::duration_cast<std::chrono::milliseconds>(
+                        b.lifetime - std::chrono::system_clock::now())
+                        .count() /
+                      std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::seconds(5))
+                        .count();
+                DrawCircleV(b.pos, 4, c);
             }
             draw_ship(s);
             draw_ship(y);
             draw_turret(t, GetScreenToWorld2D(GetMousePosition(), c));
+            auto remove_explosion = std::remove_if(
+              explosions.begin(), explosions.end(), [](auto const& p) {
+                  return std::chrono::system_clock::now() >
+                         p.creation_time + p.lifetime;
+              });
+            explosions.erase(remove_explosion, explosions.end());
+            for (auto const& p : explosions) {
+                float r =
+                  float(std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now() - p.creation_time)
+                          .count()) /
+                  p.lifetime.count();
+                int ir = 50 * (r * r);
+                DrawRing(p.pos, r * 50, ir, 0, 360, 0, ORANGE);
+            }
             dm.render();
             for (auto i : res) {
                 DrawCircle(i->pos.x, i->pos.y, 3, BLUE);
             }
             EndMode2D();
+        }
+        for (auto& b : bullets) {
+            std::vector<typename std::vector<drone>::iterator> bullet_res;
+            b.pos += b.v;
+            auto [bx, by] = GetWorldToScreen2D(b.pos, c);
+            dm.qtree_green.query(bx - 10, by - 10, 20, 20, bullet_res);
+            if (bullet_res.size() > 0) {
+                auto closest = bullet_res.front();
+                auto current_dist = Vector2Distance(closest->pos, b.pos);
+                for (auto const& br : bullet_res) {
+                    auto new_dist = Vector2Distance(br->pos, b.pos);
+                    if (new_dist < current_dist) {
+                        current_dist = new_dist;
+                        closest = br;
+                    }
+                }
+                if (CheckCollisionCircles(b.pos, 4, closest->pos, 2)) {
+                    b.hits -= 1;
+                    std::cout << "hit something" << std::endl;
+                    closest->health -= 1;
+                    explosions.emplace_back(explosion_particle{
+                      .pos = b.pos,
+                      .lifetime = std::chrono::milliseconds(400),
+                      .creation_time = std::chrono::system_clock::now(),
+                    });
+                }
+            }
+        }
+        if (bullets.size() > 0) {
+            auto it =
+              std::remove_if(bullets.begin(), bullets.end(), [](auto& b) {
+                  return b.lifetime < std::chrono::system_clock::now() ||
+                         b.hits <= 0;
+              });
+            bullets.erase(it, bullets.end());
         }
 
         EndDrawing();

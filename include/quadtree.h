@@ -41,8 +41,8 @@ class quadtree
     std::array<std::unique_ptr<quadtree<T>>, 4> quadrants;
     std::vector<typename std::vector<T>::iterator> elements;
     std::size_t capacity;
-    double min_w{ 1920.f / 32 };
-    double min_h{ 1080.f / 32 };
+    double min_w{ 1920.f / 64 };
+    double min_h{ 1080.f / 64 };
 
   public:
     double x;

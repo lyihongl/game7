@@ -1,4 +1,5 @@
 #include "include/util.h"
+#include <cstdint>
 
 namespace yhl_util {
 
@@ -18,4 +19,9 @@ check_collision(const Rectangle& rect1, const Rectangle& rect2)
     // If neither condition is true, the rectangles overlap
     return true;
 }
+
+template<typename T>
+concept has_lifetime = requires(T t) {
+    { t.lifetime } -> std::same_as<uint64_t&>;
+};
 };
