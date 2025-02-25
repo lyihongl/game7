@@ -45,6 +45,7 @@ struct drone
 {
     Vector2 pos;
     Vector2 vel{ 0, 0 };
+    int radius;
     float mass{ 1.f };
     int health;
 };
@@ -52,30 +53,28 @@ struct drone
 class drone_manager
 {
   public:
-    drone_manager(int n, std::mt19937& gen)
-      : green(n)
-      , red(3)
-      , yellow(n)
-      , player(1)
-      , qtree_green(-1000, -1000, 4920, 4080)
-      , qtree_red(-1000, -1000, 4920, 4080)
-      , qtree_yellow(-1000, -1000, 4920, 4080)
+    drone_manager()
+      : //   : green(n)
+        //   , red(3)
+        //   , yellow(n)
+      player(1)
+    //   , qtree_green(-1000, -1000, 4920, 4080)
+    //   , qtree_red(-1000, -1000, 4920, 4080)
+    //   , qtree_yellow(-1000, -1000, 4920, 4080)
     {
-        auto xd = std::uniform_int_distribution<>{ 0, 1920 };
-        auto yd = std::uniform_int_distribution<>{ 0, 1920 };
-        for (auto& g : green) {
-            g.pos = { float(xd(gen)), float(yd(gen)) };
-            g.health = 1;
-        }
-        for (auto& g : red) {
-            g.pos = { float(xd(gen)), float(yd(gen)) };
-            g.mass = 150.f;
-            g.health = 100;
-        }
-        for (auto& g : yellow) {
-            g.pos = { float(xd(gen)), float(yd(gen)) };
-            g.health = 1;
-        }
+        // for (auto& g : green) {
+        //     g.pos = { float(xd(gen)), float(yd(gen)) };
+        //     g.health = 1;
+        // }
+        // for (auto& g : red) {
+        //     g.pos = { float(xd(gen)), float(yd(gen)) };
+        //     g.mass = 150.f;
+        //     g.health = 100;
+        // }
+        // for (auto& g : yellow) {
+        //     g.pos = { float(xd(gen)), float(yd(gen)) };
+        //     g.health = 1;
+        // }
         player[0].pos = { 1920.f / 2, 1080.f / 2 };
     }
     void tick(Vector2 const&, const Camera2D&);
@@ -93,16 +92,58 @@ class drone_manager
                      float f,
                      float effective_dist);
 
-    yhl_util::quadtree<drone> qtree_green;
-    yhl_util::quadtree<drone> qtree_yellow;
-    yhl_util::quadtree<drone> qtree_red;
+    void register_color(const std::string& c,
+                        int n,
+                        int hp,
+                        int size,
+                        int mass,
+                        Color color,
+                        std::mt19937& gen);
+
+    // yhl_util::quadtree<drone> qtree_green;
+    // yhl_util::quadtree<drone> qtree_yellow;
+    // yhl_util::quadtree<drone> qtree_red;
+    std::unordered_map<std::string, std::vector<drone>> drones;
+    std::unordered_map<std::string, yhl_util::quadtree<drone>> qtrees;
+    std::unordered_map<std::string, Color> drone_color;
 
   private:
-    std::vector<drone> green;
-    std::vector<drone> red;
-    std::vector<drone> yellow;
+    // std::vector<drone> green;
+    // std::vector<drone> red;
+    // std::vector<drone> yellow;
     std::vector<drone> player;
 };
+
+struct drone_register_args
+{
+    const std::string_view c;
+    int n;
+    int hp;
+    int size;
+    int mass;
+};
+
+void
+drone_manager::register_color(const std::string& key,
+                              int n,
+                              int hp,
+                              int radius,
+                              int mass,
+                              Color color,
+                              std::mt19937& gen)
+{
+    drones.emplace(key, std::vector<drone>(n));
+    drone_color.emplace(key, color);
+    qtrees.emplace(key, yhl_util::quadtree<drone>{ -2000, -2000, 5920, 5080 });
+    auto xd = std::uniform_int_distribution<>{ 0, 1920 };
+    for (auto& d : drones.at(key)) {
+        d.health = hp;
+        d.radius = radius;
+        d.mass = mass;
+        d.pos.x = float(xd(gen));
+        d.pos.y = float(xd(gen));
+    }
+}
 
 void
 drone_manager::rule(std::vector<drone>& a,
@@ -188,38 +229,58 @@ drone_manager::player_rule(std::vector<drone>& a,
 void
 drone_manager::tick(Vector2 const& player_pos, const Camera2D& c)
 {
-    qtree_green.clear();
-    qtree_yellow.clear();
-    qtree_red.clear();
-    auto remove_green = std::remove_if(
-      green.begin(), green.end(), [](auto const& g) { return g.health <= 0; });
-    green.erase(remove_green, green.end());
+    for (auto& [color, tree] : qtrees) {
+        tree.clear();
+        auto& drone = drones.at(color);
+        auto remove =
+          std::remove_if(drone.begin(), drone.end(), [](auto const& g) {
+              return g.health <= 0;
+          });
+        drone.erase(remove, drone.end());
+        for (auto it = drone.begin(); it != drone.end(); it++) {
+            auto [px, py] = GetWorldToScreen2D(it->pos, c);
+            tree.insert(it, px, py);
+        }
+    }
+    // qtree_green.clear();
+    // qtree_yellow.clear();
+    // qtree_red.clear();
+    // green.erase(remove_green, green.end());
+    // auto remove_yellow =
+    //   std::remove_if(yellow.begin(), yellow.end(), [](auto const& g) {
+    //       return g.health <= 0;
+    //   });
+    // yellow.erase(remove_yellow, yellow.end());
 
-    for (auto it = green.begin(); it != green.end(); it++) {
-        auto [px, py] = GetWorldToScreen2D(it->pos, c);
-        qtree_green.insert(it, px, py);
-    }
-    for (auto it = yellow.begin(); it != yellow.end(); it++) {
-        auto [px, py] = GetWorldToScreen2D(it->pos, c);
-        qtree_yellow.insert(it, px, py);
-    }
+    // auto remove_red = std::remove_if(
+    //   red.begin(), red.end(), [](auto const& g) { return g.health <= 0; });
+    // red.erase(remove_red, red.end());
+
+    // for (auto it = green.begin(); it != green.end(); it++) {
+    //     auto [px, py] = GetWorldToScreen2D(it->pos, c);
+    //     qtree_green.insert(it, px, py);
+    // }
+    // for (auto it = yellow.begin(); it != yellow.end(); it++) {
+    //     auto [px, py] = GetWorldToScreen2D(it->pos, c);
+    //     qtree_yellow.insert(it, px, py);
+    // }
     // for (auto it = red.begin(); it != red.end(); it++) {
     //     auto [px, py] = GetWorldToScreen2D(it->pos, c);
     //     qtree_red.insert(it, px, py);
     // }
 
-    rule(green, qtree_green, -0.32, 200);
-    rule(green, qtree_green, 0.3, 70);
-    rule(green, red, 0.8, 50);
-    rule(green, red, -0.17, 200);
+    rule(drones.at("green"), qtrees.at("green"), -0.32, 200);
+    rule(drones.at("green"), qtrees.at("green"), 0.32, 70);
+    rule(drones.at("green"), qtrees.at("red"), 0.47, 50);
+    rule(drones.at("green"), qtrees.at("red"), -0.47, 200);
     // rule(green, red, 0.5, 10);
-    rule(green, qtree_yellow, 0.34, 200);
-    rule(red, qtree_green, -0.34, 200);
-    rule(red, red, 0.1, 400);
-    rule(red, qtree_yellow, 0.3, 100);
+    rule(drones.at("green"), qtrees.at("yellow"), 0.34, 200);
+    rule(drones.at("red"), qtrees.at("green"), -0.34, 200);
+    rule(drones.at("red"), qtrees.at("red"), 0.13, 300);
+    rule(drones.at("red"), qtrees.at("yellow"), 0.4, 100);
     // rule(red, red, 0.8, 50);
-    rule(yellow, qtree_yellow, 0.15, 60);
-    rule(yellow, qtree_green, -0.2, 200);
+    rule(drones.at("yellow"), qtrees.at("yellow"), 0.15, 60);
+    rule(drones.at("yellow"), qtrees.at("green"), -0.2, 200);
 
     // rule(green, green, -0.32, 200);
     // rule(green, green, 0.3, 70);
@@ -233,23 +294,29 @@ drone_manager::tick(Vector2 const& player_pos, const Camera2D& c)
     // // rule(red, red, 0.8, 50);
     // rule(yellow, yellow, 0.15, 60);
     // rule(yellow, green, -0.2, 200);
-    player_rule(yellow, player_pos, -0.2, 500);
-    player_rule(green, player_pos, -1.4, 2000);
-    player_rule(red, player_pos, -1.4, 2000);
+    player_rule(drones.at("yellow"), player_pos, -0.2, 500);
+    player_rule(drones.at("green"), player_pos, -1.4, 2000);
+    player_rule(drones.at("red"), player_pos, -1.4, 2000);
 }
 
 void
 drone_manager::render() const
 {
-    for (auto const& g : green) {
-        DrawCircle(g.pos.x, g.pos.y, 2, GREEN);
+    for (auto const& [c, d] : drones) {
+        for (auto const& drone : d) {
+            DrawCircle(
+              drone.pos.x, drone.pos.y, drone.radius, drone_color.at(c));
+        }
     }
-    for (auto const& g : red) {
-        DrawCircle(g.pos.x, g.pos.y, 10, RED);
-    }
-    for (auto const& g : yellow) {
-        DrawCircle(g.pos.x, g.pos.y, 2, YELLOW);
-    }
+    // for (auto const& g : green) {
+    //     DrawCircle(g.pos.x, g.pos.y, 2, GREEN);
+    // }
+    // for (auto const& g : red) {
+    //     DrawCircle(g.pos.x, g.pos.y, 10, RED);
+    // }
+    // for (auto const& g : yellow) {
+    //     DrawCircle(g.pos.x, g.pos.y, 2, YELLOW);
+    // }
 }
 
 /*
@@ -286,12 +353,15 @@ struct ship_param
 struct ship
 {
     Eigen::Rotation2Dd angle;
+    float target_angle;
     float x;
     float y;
+    float v;
     ship(const ship_param& p)
       : angle(p.angle)
       , x(p.x)
       , y(p.y)
+      , v(0)
     {
     }
     std::vector<mounting_point> mounting_points;
@@ -339,9 +409,11 @@ mounting_point::get_center() const
 void
 draw_ship(const ship& s)
 {
-    Rectangle r{ 0, 0, 40, 100 };
-    place_center_at(r, s.get_center());
-    DrawRectangleLinesEx(r, 1, WHITE);
+    // Rectangle r{ 0, 0, 40, 100 };
+    // place_center_at(r, s.get_center());
+    // DrawRectangleLinesEx(r, 1, WHITE);
+    DrawCircleLinesV(s.get_center(), 40, WHITE);
+    DrawCircleLinesV(s.get_center(), 100, RAYWHITE);
     auto [cx, cy] = s.get_center();
     DrawCircle(cx, cy, 2, RED);
     for (auto const& m : s.mounting_points) {
@@ -386,7 +458,7 @@ struct bullet
     Vector2 v;
     Vector2 pos;
     decltype(std::chrono::system_clock::now()) lifetime;
-    int hits = 1;
+    int hits = 2;
 };
 
 struct explosion_particle
@@ -415,7 +487,10 @@ main(void)
     std::random_device rd{};
     auto mtgen = std::mt19937{ rd() };
 
-    drone_manager dm{ 1000, mtgen };
+    drone_manager dm{};
+    dm.register_color("green", 1000, 1, 2, 1, GREEN, mtgen);
+    dm.register_color("yellow", 1000, 1, 2, 1, YELLOW, mtgen);
+    dm.register_color("red", 3, 25, 10, 150, RED, mtgen);
 
     InitWindow(1920, 1080, "raylib [core] example - basic window");
     Camera2D c{};
@@ -429,14 +504,18 @@ main(void)
 
     bool qtree_debug = false;
 
-    auto bullet_time = std::chrono::duration(std::chrono::milliseconds(10));
+    auto bullet_time = std::chrono::duration(std::chrono::milliseconds(100));
     auto next_time = std::chrono::system_clock::now();
 
     std::vector<explosion_particle> explosions;
 
     while (!WindowShouldClose()) {
 
-        c.zoom += ((float)GetMouseWheelMove() * 0.2f);
+        if (GetMouseWheelMove() < 0) {
+            c.zoom /= 1.1;
+        } else if (GetMouseWheelMove() > 0) {
+            c.zoom *= 1.1;
+        }
         c.target = s.get_center();
         // s.y += 1;
 
@@ -494,12 +573,12 @@ main(void)
         dm.tick(s.get_center(), c);
         std::vector<typename std::vector<drone>::iterator> res;
         if (qtree_debug) {
-            dm.qtree_green.draw();
-            dm.qtree_yellow.draw();
-            dm.qtree_green.query(
-              mouse_x - 50, mouse_y - 50, 100, 100, res, true);
-            dm.qtree_yellow.query(
-              mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+            // dm.qtree_green.draw();
+            // dm.qtree_yellow.draw();
+            // dm.qtree_green.query(
+            //   mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+            // dm.qtree_yellow.query(
+            //   mouse_x - 50, mouse_y - 50, 100, 100, res, true);
         }
         DrawRectangleLines(mouse_x - 50, mouse_y - 50, 100, 100, WHITE);
 
@@ -533,6 +612,7 @@ main(void)
                   p.lifetime.count();
                 int ir = 50 * (r * r);
                 DrawRing(p.pos, r * 50, ir, 0, 360, 0, ORANGE);
+                DrawCircleLinesV(p.pos, 70 * r, { 255, 152, 60, 255 });
             }
             dm.render();
             for (auto i : res) {
@@ -544,7 +624,12 @@ main(void)
             std::vector<typename std::vector<drone>::iterator> bullet_res;
             b.pos += b.v;
             auto [bx, by] = GetWorldToScreen2D(b.pos, c);
-            dm.qtree_green.query(bx - 10, by - 10, 20, 20, bullet_res);
+            for (auto const& [_, qtree] : dm.qtrees) {
+                qtree.query(bx - 10, by - 10, 20, 20, bullet_res);
+            }
+            // dm.qtree_green.query(bx - 10, by - 10, 20, 20, bullet_res);
+            // dm.qtree_yellow.query(bx - 10, by - 10, 20, 20, bullet_res);
+            // dm.qtree_red.query(bx - 10, by - 10, 20, 20, bullet_res);
             if (bullet_res.size() > 0) {
                 auto closest = bullet_res.front();
                 auto current_dist = Vector2Distance(closest->pos, b.pos);
@@ -557,7 +642,6 @@ main(void)
                 }
                 if (CheckCollisionCircles(b.pos, 4, closest->pos, 2)) {
                     b.hits -= 1;
-                    std::cout << "hit something" << std::endl;
                     closest->health -= 1;
                     explosions.emplace_back(explosion_particle{
                       .pos = b.pos,
