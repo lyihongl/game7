@@ -5,13 +5,17 @@
 #include <Eigen/src/Geometry/Rotation2D.h>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <random>
 #include <ratio>
 #include <raylib.h>
 #include <raymath.h>
 #include <vector>
+
+namespace fs = std::filesystem;
 
 template<typename T>
 concept has_center = requires(const T& t) {
@@ -49,6 +53,8 @@ struct drone
     float mass{ 1.f };
     int health;
 };
+
+using drone_res_vec = std::vector<typename std::vector<drone>::iterator>;
 
 class drone_manager
 {
@@ -269,8 +275,8 @@ drone_manager::tick(Vector2 const& player_pos, const Camera2D& c)
     //     qtree_red.insert(it, px, py);
     // }
 
-    rule(drones.at("green"), qtrees.at("green"), -0.32, 200);
-    rule(drones.at("green"), qtrees.at("green"), 0.32, 70);
+    rule(drones.at("green"), qtrees.at("green"), -0.40, 200);
+    rule(drones.at("green"), qtrees.at("green"), 0.40, 100);
     rule(drones.at("green"), qtrees.at("red"), 0.47, 50);
     rule(drones.at("green"), qtrees.at("red"), -0.47, 200);
     // rule(green, red, 0.5, 10);
@@ -354,13 +360,11 @@ struct ship
 {
     Eigen::Rotation2Dd angle;
     float target_angle;
-    float x;
-    float y;
-    float v;
+    Vector2 pos;
+    Vector2 v;
     ship(const ship_param& p)
       : angle(p.angle)
-      , x(p.x)
-      , y(p.y)
+      , pos(p.x, p.y)
       , v(0)
     {
     }
@@ -396,7 +400,7 @@ mounting_point::get_bounding_box() const
 Vector2
 ship::get_center() const
 {
-    return { x + 20.f, y + 50.f };
+    return { pos.x + 20.f, pos.y + 50.f };
 }
 
 Vector2
@@ -459,6 +463,7 @@ struct bullet
     Vector2 pos;
     decltype(std::chrono::system_clock::now()) lifetime;
     int hits = 2;
+    int layer = 0;
 };
 
 struct explosion_particle
@@ -482,7 +487,8 @@ main(void)
     s.mounting_points.emplace_back(
       mounting_point{ .offset{ -20, 10 }, .parent = s });
 
-    turret t;
+    // turret t;
+    std::vector<turret> turrets(1);
 
     std::random_device rd{};
     auto mtgen = std::mt19937{ rd() };
@@ -493,10 +499,10 @@ main(void)
     dm.register_color("red", 3, 25, 10, 150, RED, mtgen);
 
     InitWindow(1920, 1080, "raylib [core] example - basic window");
-    Camera2D c{};
-    c.zoom = 1.0f;
-    c.offset = { 1920.f / 2, 1080.f / 2 };
-    yhl_util::quadtree<drone>::c = &c;
+    Camera2D camera{};
+    camera.zoom = 1.0f;
+    camera.offset = { 1920.f / 2, 1080.f / 2 };
+    yhl_util::quadtree<drone>::c = &camera;
     SetTargetFPS(60);
     HideCursor();
 
@@ -504,25 +510,51 @@ main(void)
 
     bool qtree_debug = false;
 
-    auto bullet_time = std::chrono::duration(std::chrono::milliseconds(100));
+    auto bullet_time = std::chrono::duration(std::chrono::milliseconds(600));
     auto next_time = std::chrono::system_clock::now();
 
     std::vector<explosion_particle> explosions;
 
-    while (!WindowShouldClose()) {
+    // auto path = fs::path{ "../assets/sounds/gun.wave" };
+    auto path = fs::path{ "gun5.wav" };
 
+    InitAudioDevice();
+    Sound gun_shot = LoadSound(path.c_str());
+    std::cout << path.c_str() << std::endl;
+
+    while (!WindowShouldClose()) {
+        auto& t = turrets.back();
         if (GetMouseWheelMove() < 0) {
-            c.zoom /= 1.1;
+            camera.zoom /= 1.1;
         } else if (GetMouseWheelMove() > 0) {
-            c.zoom *= 1.1;
+            camera.zoom *= 1.1;
         }
-        c.target = s.get_center();
+        camera.target = s.get_center();
         // s.y += 1;
+
+        // if (IsKeyDown(KEY_W)) {
+        //     s.v += 0.1;
+        // }
+        if (IsKeyDown(KEY_W)) {
+            s.v.y -= 0.8;
+        }
+        if (IsKeyDown(KEY_A)) {
+            s.v.x -= 0.8;
+        }
+        if (IsKeyDown(KEY_S)) {
+            s.v.y += 0.8;
+        }
+        if (IsKeyDown(KEY_D)) {
+            s.v.x += 0.8;
+        }
+        s.pos += s.v;
+        s.v.x /= 1.05;
+        s.v.y /= 1.05;
 
         for (auto m = s.mounting_points.begin(); m != s.mounting_points.end();
              m++) {
             if (CheckCollisionCircleRec(
-                  GetScreenToWorld2D(GetMousePosition(), c),
+                  GetScreenToWorld2D(GetMousePosition(), camera),
                   1,
                   m->get_bounding_box()) &&
                 IsMouseButtonPressed(MOUSE_LEFT_BUTTON) &&
@@ -530,16 +562,17 @@ main(void)
                 // attach turret to ship
                 t.attachment_point = m;
                 m->attachment.emplace(t);
+                turrets.emplace_back();
             }
-            if (CheckCollisionCircleRec(
-                  GetScreenToWorld2D(GetMousePosition(), c),
-                  1,
-                  m->get_bounding_box()) &&
-                IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
-                m->attachment.has_value()) {
-                t.attachment_point.value()->attachment.reset();
-                t.attachment_point = std::nullopt;
-            }
+            // if (CheckCollisionCircleRec(
+            //       GetScreenToWorld2D(GetMousePosition(), c),
+            //       1,
+            //       m->get_bounding_box()) &&
+            //     IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
+            //     m->attachment.has_value()) {
+            //     t.attachment_point.value()->attachment.reset();
+            //     t.attachment_point = std::nullopt;
+            // }
         }
         if (IsKeyPressed(KEY_B)) {
             qtree_debug = !qtree_debug;
@@ -552,13 +585,14 @@ main(void)
 
                     bullets.emplace_back(bullet{
                       .v = Vector2Normalize(
-                             GetScreenToWorld2D(GetMousePosition(), c) -
+                             GetScreenToWorld2D(GetMousePosition(), camera) -
                              m.get_center()) *
-                           15.f,
+                           30.f,
                       .pos = m.get_center(),
                       .lifetime = std::chrono::system_clock::now() +
                                   std::chrono::seconds(5),
                     });
+                    PlaySound(gun_shot);
                     next_time =
                       std::max(next_time + bullet_time,
                                std::chrono::system_clock::now() + bullet_time);
@@ -570,34 +604,67 @@ main(void)
         auto [mouse_x, mouse_y] = GetMousePosition();
         DrawCircleLines(mouse_x, mouse_y, 3, WHITE);
         ClearBackground(BLACK);
-        dm.tick(s.get_center(), c);
+        dm.tick(s.get_center(), camera);
         std::vector<typename std::vector<drone>::iterator> res;
         if (qtree_debug) {
-            // dm.qtree_green.draw();
-            // dm.qtree_yellow.draw();
-            // dm.qtree_green.query(
-            //   mouse_x - 50, mouse_y - 50, 100, 100, res, true);
-            // dm.qtree_yellow.query(
-            //   mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+            dm.qtrees.at("green").draw();
+            dm.qtrees.at("yellow").draw();
+            dm.qtrees.at("green").query(
+              mouse_x - 50, mouse_y - 50, 100, 100, res, true);
+            dm.qtrees.at("yellow").query(
+              mouse_x - 50, mouse_y - 50, 100, 100, res, true);
         }
         DrawRectangleLines(mouse_x - 50, mouse_y - 50, 100, 100, WHITE);
 
         {
-            BeginMode2D(c);
+            BeginMode2D(camera);
             for (auto& b : bullets) {
-                Color c = SKYBLUE;
-                c.a = 255 *
-                      std::chrono::duration_cast<std::chrono::milliseconds>(
-                        b.lifetime - std::chrono::system_clock::now())
-                        .count() /
-                      std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::seconds(5))
-                        .count();
-                DrawCircleV(b.pos, 4, c);
+                Color color = SKYBLUE;
+                color.a = 255 *
+                          std::chrono::duration_cast<std::chrono::milliseconds>(
+                            b.lifetime - std::chrono::system_clock::now())
+                            .count() /
+                          std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::seconds(5))
+                            .count();
+                DrawCircleV(b.pos, 4, color);
+                std::vector<typename std ::vector<drone>::iterator> res;
+                if (b.layer == 0) {
+                    Vector2 query_pos = GetWorldToScreen2D(b.pos, camera);
+                    dm.qtrees.at("red").query(
+                      query_pos.x - 200, query_pos.y - 200, 400, 400, res);
+
+                    auto lowest_dist = std::numeric_limits<float>::max();
+                    for (auto r : res) {
+                        // std::cout << "red pos: " << r->pos
+                        //           << " bullet pos: " << b.pos << std::endl;
+                        lowest_dist =
+                          std::min(lowest_dist, Vector2Distance(r->pos, b.pos));
+                        if (lowest_dist < 100) {
+                            b.hits = 0;
+                            for (int i = 0; i < 8; i++) {
+                                float angle = float(i - 3) / 20;
+                                bullets.emplace_back(bullet{
+                                  .v = Vector2Rotate(b.v, angle),
+                                  .pos = b.pos,
+                                  .lifetime = std::chrono::system_clock::now() +
+                                              std::chrono::seconds(2),
+                                  .layer = 1,
+                                });
+                            }
+                        }
+                    }
+                    Color yellow = YELLOW;
+                    yellow.a = std::max(255 - int(lowest_dist * 0.5), 0);
+                    DrawCircleLinesV(b.pos, 100, yellow);
+                }
             }
             draw_ship(s);
             draw_ship(y);
-            draw_turret(t, GetScreenToWorld2D(GetMousePosition(), c));
+            for (auto const& turret : turrets) {
+                draw_turret(turret,
+                            GetScreenToWorld2D(GetMousePosition(), camera));
+            }
             auto remove_explosion = std::remove_if(
               explosions.begin(), explosions.end(), [](auto const& p) {
                   return std::chrono::system_clock::now() >
@@ -623,7 +690,7 @@ main(void)
         for (auto& b : bullets) {
             std::vector<typename std::vector<drone>::iterator> bullet_res;
             b.pos += b.v;
-            auto [bx, by] = GetWorldToScreen2D(b.pos, c);
+            auto [bx, by] = GetWorldToScreen2D(b.pos, camera);
             for (auto const& [_, qtree] : dm.qtrees) {
                 qtree.query(bx - 10, by - 10, 20, 20, bullet_res);
             }
